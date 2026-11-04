@@ -1,0 +1,718 @@
+--!strict
+--[[
+    Module: Complete MapEffects, Auto Awake Statue with Cycle Mode (v10)
+    Target Statues: Axe, God, Mace, Shield, Sword Statue
+    Path: workspace.Map.Statues
+    Wave Source: PlayerGui.HUD.Map.WavesAmount
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ==========================================
+-- 1. STATE & CONFIGURATION
+-- ==========================================
+local StatueList = {
+    "All",
+    "Cycle (Mace->Sword->God)",
+    "Axe Statue",
+    "God Statue",
+    "Mace Statue",
+    "Shield Statue",
+    "Sword Statue"
+}
+
+-- Danh sách vòng lặp luân phiên 3 tượng theo yêu cầu
+local CycleSequence = {
+    "Mace Statue",
+    "Sword Statue",
+    "God Statue"
+}
+
+local State = {
+    -- Auto Arise & Tele Mob
+    AutoTele = false,
+    AutoArise = false,
+    AntiAFK = true,
+    
+    -- Auto Awake Statue
+    AutoAwake = false,
+    TargetStatue = "Cycle (Mace->Sword->God)",
+    CycleIndex = 1, -- Vị trí tượng hiện hành trong vòng lặp
+    TargetWave = 3,
+    CurrentWave = 1,
+    LastDetectedWave = 1,
+    IsAwaking = false,
+    AwakenedStatues = {} :: {[string]: boolean},
+    ResetPerWave = true,
+    HasAwakenedThisMatch = false, -- Đánh dấu đã awake xong tượng của ván này chưa
+    
+    -- Runtime
+    IsRunning = true,
+    CurrentTarget = nil :: Instance?,
+    LastAriseTime = 0,
+    AriseInterval = 1.0,
+    LastAfkPulse = os.clock(),
+    AfkPulseInterval = 300,
+    TeleOffset = Vector3.new(0, 0.5, 3.5),
+}
+
+-- ==========================================
+-- 2. DYNAMIC GUI CREATION
+-- ==========================================
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local existingGui = playerGui:FindFirstChild("MrDon_AriseController")
+if existingGui then
+    existingGui:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MrDon_AriseController"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = playerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.fromOffset(300, 450)
+MainFrame.Position = UDim2.new(0.5, -150, 0.18, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(65, 65, 85)
+UIStroke.Thickness = 1.5
+UIStroke.Parent = MainFrame
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1, 0, 0, 34)
+TitleBar.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = TitleBar
+
+local TitleFix = Instance.new("Frame")
+TitleFix.Size = UDim2.new(1, 0, 0, 8)
+TitleFix.Position = UDim2.new(0, 0, 1, -8)
+TitleFix.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+TitleFix.BorderSizePixel = 0
+TitleFix.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -40, 1, 0)
+TitleLabel.Position = UDim2.fromOffset(12, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "MapEffects & Statue Master (v10)"
+TitleLabel.TextColor3 = Color3.fromRGB(235, 235, 245)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 12
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.fromOffset(26, 26)
+CloseBtn.Position = UDim2.new(1, -30, 0, 4)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(190, 55, 55)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 12
+CloseBtn.Parent = TitleBar
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 6)
+CloseCorner.Parent = CloseBtn
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, -24, 0, 18)
+StatusLabel.Position = UDim2.fromOffset(12, 40)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "Mob Target: None"
+StatusLabel.TextColor3 = Color3.fromRGB(165, 165, 185)
+StatusLabel.Font = Enum.Font.GothamMedium
+StatusLabel.TextSize = 11
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+StatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+StatusLabel.Parent = MainFrame
+
+local WaveStatusLabel = Instance.new("TextLabel")
+WaveStatusLabel.Size = UDim2.new(1, -24, 0, 18)
+WaveStatusLabel.Position = UDim2.fromOffset(12, 58)
+WaveStatusLabel.BackgroundTransparency = 1
+WaveStatusLabel.Text = "Wave Hiện Tại: 1 | Đích: Wave 3"
+WaveStatusLabel.TextColor3 = Color3.fromRGB(130, 200, 255)
+WaveStatusLabel.Font = Enum.Font.Gotham
+WaveStatusLabel.TextSize = 11
+WaveStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+WaveStatusLabel.Parent = MainFrame
+
+local function createToggleButton(text: string, posY: number, defaultState: boolean, callback: (boolean) -> ()): TextButton
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -24, 0, 34)
+    btn.Position = UDim2.fromOffset(12, posY)
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 12
+    btn.AutoButtonColor = false
+    btn.Parent = MainFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.Parent = btn
+
+    local isEnabled = defaultState
+
+    local function updateVisual()
+        if isEnabled then
+            btn.BackgroundColor3 = Color3.fromRGB(40, 145, 85)
+            btn.Text = text .. ": ON"
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            stroke.Color = Color3.fromRGB(70, 200, 115)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(42, 42, 54)
+            btn.Text = text .. ": OFF"
+            btn.TextColor3 = Color3.fromRGB(210, 210, 220)
+            stroke.Color = Color3.fromRGB(70, 70, 90)
+        end
+    end
+
+    updateVisual()
+
+    btn.MouseButton1Click:Connect(function()
+        isEnabled = not isEnabled
+        updateVisual()
+        callback(isEnabled)
+    end)
+
+    return btn
+end
+
+createToggleButton("Auto Tele To Model", 80, false, function(val)
+    State.AutoTele = val
+    if not val then
+        State.CurrentTarget = nil
+        StatusLabel.Text = "Mob Target: Tắt Auto Tele"
+    end
+end)
+
+createToggleButton("Auto Arise (1s / lần)", 118, false, function(val)
+    State.AutoArise = val
+end)
+
+createToggleButton("Anti-AFK Protection", 156, true, function(val)
+    State.AntiAFK = val
+end)
+
+local SepLine = Instance.new("Frame")
+SepLine.Size = UDim2.new(1, -24, 0, 1)
+SepLine.Position = UDim2.fromOffset(12, 196)
+SepLine.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+SepLine.BorderSizePixel = 0
+SepLine.Parent = MainFrame
+
+local statueIdx = 2 -- Mặc định chọn ngay Cycle
+local StatueSelectorBtn = Instance.new("TextButton")
+StatueSelectorBtn.Size = UDim2.new(1, -24, 0, 32)
+StatueSelectorBtn.Position = UDim2.fromOffset(12, 204)
+StatueSelectorBtn.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
+StatueSelectorBtn.Text = "Statue: Cycle (Mace)"
+StatueSelectorBtn.TextColor3 = Color3.fromRGB(240, 240, 255)
+StatueSelectorBtn.Font = Enum.Font.GothamMedium
+StatueSelectorBtn.TextSize = 12
+StatueSelectorBtn.Parent = MainFrame
+
+local sc = Instance.new("UICorner")
+sc.CornerRadius = UDim.new(0, 6)
+sc.Parent = StatueSelectorBtn
+
+local function updateStatueBtnText()
+    if State.TargetStatue == "Cycle (Mace->Sword->God)" then
+        StatueSelectorBtn.Text = string.format("Statue: Cycle [%s]", CycleSequence[State.CycleIndex]:gsub(" Statue", ""))
+    else
+        StatueSelectorBtn.Text = "Statue Mục Tiêu: " .. State.TargetStatue
+    end
+end
+
+StatueSelectorBtn.MouseButton1Click:Connect(function()
+    statueIdx = statueIdx + 1
+    if statueIdx > #StatueList then
+        statueIdx = 1
+    end
+    State.TargetStatue = StatueList[statueIdx]
+    updateStatueBtnText()
+end)
+
+local WaveBox = Instance.new("TextBox")
+WaveBox.Size = UDim2.new(1, -24, 0, 32)
+WaveBox.Position = UDim2.fromOffset(12, 242)
+WaveBox.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
+WaveBox.Text = "Chỉ Awake ở Wave: 3"
+WaveBox.TextColor3 = Color3.fromRGB(240, 240, 255)
+WaveBox.Font = Enum.Font.GothamMedium
+WaveBox.TextSize = 12
+WaveBox.ClearTextOnFocus = true
+WaveBox.Parent = MainFrame
+
+local wc = Instance.new("UICorner")
+wc.CornerRadius = UDim.new(0, 6)
+wc.Parent = WaveBox
+
+WaveBox.FocusLost:Connect(function()
+    local num = tonumber(string.match(WaveBox.Text, "%d+"))
+    if num and num > 0 then
+        State.TargetWave = num
+        WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(num)
+        WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+    else
+        WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(State.TargetWave)
+    end
+end)
+
+createToggleButton("Auto Awake Statue", 280, false, function(val)
+    State.AutoAwake = val
+    if not val then
+        State.IsAwaking = false
+    end
+end)
+
+createToggleButton("Auto Reset Khi Đổi Wave / Replay", 318, true, function(val)
+    State.ResetPerWave = val
+end)
+
+local ResetStatuesBtn = Instance.new("TextButton")
+ResetStatuesBtn.Size = UDim2.new(1, -24, 0, 30)
+ResetStatuesBtn.Position = UDim2.fromOffset(12, 358)
+ResetStatuesBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+ResetStatuesBtn.Text = "Chuyển Tượng Kế Tiếp Trong Cycle"
+ResetStatuesBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
+ResetStatuesBtn.Font = Enum.Font.Gotham
+ResetStatuesBtn.TextSize = 11
+ResetStatuesBtn.Parent = MainFrame
+
+local rc = Instance.new("UICorner")
+rc.CornerRadius = UDim.new(0, 6)
+rc.Parent = ResetStatuesBtn
+
+-- Nút thủ công: Chuyển ngay sang tượng kế tiếp trong cycle nếu muốn
+ResetStatuesBtn.MouseButton1Click:Connect(function()
+    table.clear(State.AwakenedStatues)
+    State.HasAwakenedThisMatch = false
+    State.CycleIndex = State.CycleIndex + 1
+    if State.CycleIndex > #CycleSequence then
+        State.CycleIndex = 1
+    end
+    updateStatueBtnText()
+    ResetStatuesBtn.Text = "Đã chuyển -> " .. CycleSequence[State.CycleIndex]
+    task.delay(1.2, function()
+        ResetStatuesBtn.Text = "Chuyển Tượng Kế Tiếp Trong Cycle"
+    end)
+end)
+
+-- Kéo thả cửa sổ
+local dragging = false
+local dragInput: InputObject? = nil
+local dragStart: Vector3? = nil
+local startPos: UDim2? = nil
+
+TitleBar.InputBegan:Connect(function(input: InputObject)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+TitleBar.InputChanged:Connect(function(input: InputObject)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+local dragConnection = UserInputService.InputChanged:Connect(function(input: InputObject)
+    if input == dragInput and dragging and dragStart and startPos then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- ==========================================
+-- 3. TRUY XUẤT CHUẨN XÁC WAVESAMOUNT (O(1))
+-- ==========================================
+local function parseWavesAmountString(str: string): number?
+    if not str or str == "" then return nil end
+
+    local wave = string.match(str, "^%s*(%d+)")
+    if wave then
+        return tonumber(wave)
+    end
+
+    local cleaned = string.gsub(str, "<[^>]+>", "")
+    local fallback = string.match(cleaned, "(%d+)%s*/")
+    if fallback then
+        return tonumber(fallback)
+    end
+
+    return nil
+end
+
+local function getExactWaveNumber(): number
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return State.CurrentWave end
+
+    local hud = pGui:FindFirstChild("HUD")
+    if hud then
+        local map = hud:FindFirstChild("Map")
+        if map then
+            local wavesAmount = map:FindFirstChild("WavesAmount") :: TextLabel?
+            if wavesAmount and wavesAmount:IsA("TextLabel") then
+                local parsed = parseWavesAmountString(wavesAmount.Text)
+                if parsed then
+                    return parsed
+                end
+            end
+        end
+    end
+
+    return State.CurrentWave
+end
+
+-- ==========================================
+-- 4. STATUE INTERACTION LOGIC
+-- ==========================================
+local function getStatuesFolder(): Instance?
+    local map = workspace:FindFirstChild("Map")
+    if not map then return nil end
+    return map:FindFirstChild("Statues")
+end
+
+local function getStatueInteractives(statueModel: Instance): (BasePart?, ProximityPrompt?)
+    local part = statueModel:FindFirstChild("PromptAnchor") or statueModel:FindFirstChild("HumanoidRootPart")
+    if not part or not part:IsA("BasePart") then
+        part = statueModel:FindFirstChildWhichIsA("BasePart", true)
+    end
+
+    local prompt = nil
+    local anchor = statueModel:FindFirstChild("PromptAnchor")
+    if anchor then
+        prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true)
+    end
+    if not prompt then
+        prompt = statueModel:FindFirstChildWhichIsA("ProximityPrompt", true)
+    end
+
+    return part :: BasePart?, prompt
+end
+
+local function processAwakeStatue(statueModel: Instance): boolean
+    local targetPart, prompt = getStatueInteractives(statueModel)
+    if not targetPart then return false end
+
+    local character = LocalPlayer.Character
+    if not character then return false end
+    local rootPart = character:FindFirstChild("HumanoidRootPart") :: BasePart?
+    if not rootPart then return false end
+
+    rootPart.AssemblyLinearVelocity = Vector3.zero
+    rootPart.AssemblyAngularVelocity = Vector3.zero
+    rootPart.CFrame = CFrame.lookAt(targetPart.Position + Vector3.new(0, 0.5, 3.5), targetPart.Position)
+
+    if prompt and prompt.Enabled then
+        prompt.RequiresLineOfSight = false
+        prompt.MaxActivationDistance = 50
+        prompt.Exclusivity = Enum.ProximityPromptExclusivity.AlwaysShow
+
+        local holdTime = if prompt.HoldDuration > 0 then prompt.HoldDuration + 0.1 else 0.15
+        local key = if prompt.KeyboardKeyCode ~= Enum.KeyCode.Unknown then prompt.KeyboardKeyCode else Enum.KeyCode.E
+
+        VirtualInputManager:SendKeyEvent(true, key, false, game)
+        task.wait(holdTime)
+        VirtualInputManager:SendKeyEvent(false, key, false, game)
+        return true
+    end
+
+    return false
+end
+
+-- ==========================================
+-- 5. MAPEFFECTS MOB LOGIC
+-- ==========================================
+local function getMapEffectsFolder(): Instance?
+    local cam = workspace:FindFirstChild("Camera") or workspace.CurrentCamera
+    if not cam then return nil end
+    local clientWorld = cam:FindFirstChild("ClientWorld")
+    if not clientWorld then return nil end
+    return clientWorld:FindFirstChild("MapEffects")
+end
+
+local function getMobPivotPart(model: Instance): BasePart?
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    if hrp and hrp:IsA("BasePart") then return hrp end
+    if model:IsA("Model") and model.PrimaryPart then return model.PrimaryPart end
+    return model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function acquireNextMob(folder: Instance): Instance?
+    local validModels = {}
+    for _, child in ipairs(folder:GetChildren()) do
+        if getMobPivotPart(child) ~= nil then
+            table.insert(validModels, child)
+        end
+    end
+    table.sort(validModels, function(a, b) return a.Name < b.Name end)
+    return validModels[1]
+end
+
+local function triggerOptimizedArise(model: Instance)
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    local prompt = nil
+    if hrp then
+        local anchor = hrp:FindFirstChild("ArisePromptAnchor")
+        if anchor then
+            prompt = anchor:FindFirstChild("MonarchArise")
+        end
+    end
+    if not prompt then
+        prompt = model:FindFirstChild("MonarchArise", true)
+    end
+
+    local keyToPress = Enum.KeyCode.E
+    local holdTime = 0.12
+    if prompt and prompt:IsA("ProximityPrompt") then
+        prompt.Enabled = true
+        prompt.RequiresLineOfSight = false
+        prompt.MaxActivationDistance = 50
+        if prompt.KeyboardKeyCode ~= Enum.KeyCode.Unknown then
+            keyToPress = prompt.KeyboardKeyCode
+        end
+        if prompt.HoldDuration > 0 then
+            holdTime = prompt.HoldDuration + 0.05
+        end
+    end
+
+    task.spawn(function()
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, keyToPress, false, game)
+            task.wait(holdTime)
+            VirtualInputManager:SendKeyEvent(false, keyToPress, false, game)
+        end)
+    end)
+end
+
+-- ==========================================
+-- 6. ANTI-AFK HANDLER
+-- ==========================================
+local idledConnection = LocalPlayer.Idled:Connect(function()
+    if not State.IsRunning or not State.AntiAFK then return end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    end)
+end)
+
+-- ==========================================
+-- 7. EVENT-DRIVEN & ENGINE LOOP
+-- ==========================================
+local mainLoopConnection: RBXScriptConnection? = nil
+local waveChangedConn: RBXScriptConnection? = nil
+
+-- Xử lý chuyển đổi Cycle khi ván đấu mới bắt đầu (Replay)
+local function handleMatchOrWaveTransition(oldWave: number, newWave: number)
+    -- Khi số Wave bị giảm lùi (ví dụ đang ở Wave 10/20 rồi quay về Wave 1/2), đó là lúc Replay ván mới
+    if newWave < oldWave then
+        if State.TargetStatue == "Cycle (Mace->Sword->God)" then
+            State.CycleIndex = State.CycleIndex + 1
+            if State.CycleIndex > #CycleSequence then
+                State.CycleIndex = 1
+            end
+            updateStatueBtnText()
+        end
+        State.HasAwakenedThisMatch = false
+        table.clear(State.AwakenedStatues)
+    elseif State.ResetPerWave then
+        table.clear(State.AwakenedStatues)
+    end
+end
+
+local function setupWaveListener()
+    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pGui then return end
+    local hud = pGui:FindFirstChild("HUD")
+    if not hud then return end
+    local map = hud:FindFirstChild("Map")
+    if not map then return end
+    local wavesAmount = map:FindFirstChild("WavesAmount") :: TextLabel?
+
+    if wavesAmount and wavesAmount:IsA("TextLabel") then
+        if waveChangedConn then waveChangedConn:Disconnect() end
+        waveChangedConn = wavesAmount:GetPropertyChangedSignal("Text"):Connect(function()
+            local newWave = parseWavesAmountString(wavesAmount.Text)
+            if newWave and newWave ~= State.CurrentWave then
+                handleMatchOrWaveTransition(State.CurrentWave, newWave)
+                State.CurrentWave = newWave
+                WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+            end
+        end)
+    end
+end
+
+setupWaveListener()
+
+mainLoopConnection = RunService.Heartbeat:Connect(function()
+    if not State.IsRunning then return end
+
+    local now = os.clock()
+
+    -- Quét định kỳ kiểm tra Wave thực tế từ WavesAmount
+    local liveWave = getExactWaveNumber()
+    if liveWave ~= State.CurrentWave then
+        handleMatchOrWaveTransition(State.CurrentWave, liveWave)
+        State.CurrentWave = liveWave
+        WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+    end
+
+    -- Anti AFK định kỳ
+    if State.AntiAFK and (now - State.LastAfkPulse >= State.AfkPulseInterval) then
+        State.LastAfkPulse = now
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.RightControl, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
+        end)
+    end
+
+    -- Logic Auto Awake Statue
+    local isWaveMatched = (State.CurrentWave >= State.TargetWave)
+
+    if State.AutoAwake and isWaveMatched then
+        local statuesFolder = getStatuesFolder()
+        if statuesFolder then
+            local statuesToProcess = {}
+
+            -- Xác định bức tượng mục tiêu dựa theo chế độ đã chọn
+            if State.TargetStatue == "Cycle (Mace->Sword->God)" then
+                local currentCycleTarget = CycleSequence[State.CycleIndex]
+                if not State.AwakenedStatues[currentCycleTarget] and not State.HasAwakenedThisMatch then
+                    local st = statuesFolder:FindFirstChild(currentCycleTarget)
+                    if st then table.insert(statuesToProcess, st) end
+                end
+            elseif State.TargetStatue == "All" then
+                for _, sName in ipairs(StatueList) do
+                    if sName ~= "All" and not sName:find("Cycle") and not State.AwakenedStatues[sName] then
+                        local st = statuesFolder:FindFirstChild(sName)
+                        if st then table.insert(statuesToProcess, st) end
+                    end
+                end
+            else
+                if not State.AwakenedStatues[State.TargetStatue] then
+                    local st = statuesFolder:FindFirstChild(State.TargetStatue)
+                    if st then table.insert(statuesToProcess, st) end
+                end
+            end
+
+            if #statuesToProcess > 0 then
+                State.IsAwaking = true
+                local targetStatueModel = statuesToProcess[1]
+                StatusLabel.Text = "Đang Awake: " .. targetStatueModel.Name
+
+                local success = processAwakeStatue(targetStatueModel)
+                if success then
+                    task.wait(1.0)
+                    local _, pCheck = getStatueInteractives(targetStatueModel)
+                    if not pCheck or not pCheck.Enabled then
+                        State.AwakenedStatues[targetStatueModel.Name] = true
+                        if State.TargetStatue == "Cycle (Mace->Sword->God)" then
+                            State.HasAwakenedThisMatch = true
+                        end
+                    end
+                end
+                return -- Dành trọn quyền điều khiển cho Statue, tạm dừng MapEffects
+            else
+                State.IsAwaking = false
+            end
+        end
+    else
+        State.IsAwaking = false
+    end
+
+    -- Logic Auto Tele & Arise Quái thường (MapEffects)
+    local effectsFolder = getMapEffectsFolder()
+    if not effectsFolder then
+        StatusLabel.Text = "Target: Không tìm thấy MapEffects"
+        return
+    end
+
+    if not State.CurrentTarget or not State.CurrentTarget:IsDescendantOf(effectsFolder) then
+        State.CurrentTarget = acquireNextMob(effectsFolder)
+    end
+
+    local currentMob = State.CurrentTarget
+    if not currentMob then
+        if State.AutoTele or State.AutoArise then
+            StatusLabel.Text = "Mob Target: Đang chờ quái xuất hiện..."
+        end
+        return
+    end
+
+    StatusLabel.Text = "Mob Target: " .. currentMob.Name
+
+    if State.AutoTele and not State.IsAwaking then
+        local mobPart = getMobPivotPart(currentMob)
+        if mobPart then
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.lookAt(mobPart.Position + State.TeleOffset, mobPart.Position)
+            end
+        end
+    end
+
+    if State.AutoArise and not State.IsAwaking then
+        if now - State.LastAriseTime >= State.AriseInterval then
+            State.LastAriseTime = now
+            triggerOptimizedArise(currentMob)
+        end
+    end
+end)
+
+-- CLEANUP
+CloseBtn.MouseButton1Click:Connect(function()
+    State.IsRunning = false
+    State.AutoTele = false
+    State.AutoArise = false
+    State.AutoAwake = false
+    State.AntiAFK = false
+    if mainLoopConnection then mainLoopConnection:Disconnect() end
+    if dragConnection then dragConnection:Disconnect() end
+    if idledConnection then idledConnection:Disconnect() end
+    if waveChangedConn then waveChangedConn:Disconnect() end
+    ScreenGui:Destroy()
+end)
