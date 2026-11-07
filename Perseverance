@@ -1,10 +1,8 @@
 --!strict
 --[[
-    Module: Complete MapEffects, Statue Master, TSJW Quest & Persistent Config (v12)
-    Target Statues: Axe, God, Mace, Shield, Sword Statue
-    Path: workspace.Map.Statues
-    Wave Source: PlayerGui.HUD.Map.WavesAmount
-    Remote Matchmaking: ReplicatedStorage.AV_LOBBY_MATCHMAKING_V1_BLINK_RELIABLE_REMOTE
+    Module: LotusHub - Anime Vanguard (Official Canva Redesign v13)
+    Tabs: TSJW | Misc
+    Features: Persistent Config, Auto Tele, Auto Arise, Statue Cycle, TSJW Matchmaking, Anti-AFK
 ]]
 
 local Players = game:GetService("Players")
@@ -14,13 +12,17 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ==========================================
--- 1. CONFIGURATION & PERSISTENCE ENGINE
+-- 1. CONFIGURATION & ASSET RESOLVER
 -- ==========================================
-local CONFIG_FILE = "MrDon_LotusHub_Config.json"
+local CONFIG_FILE = "LotusHub_Config.json"
+local LOGO_FILENAME = "LotusLogo.png"
+-- Nếu boss man có link raw GitHub của ảnh logo, có thể dán vào đây để script tự tải về
+local LOGO_RAW_URL = "" 
 
 local StatueList = {
     "All",
@@ -38,7 +40,6 @@ local CycleSequence = {
     "God Statue"
 }
 
--- Trạng thái mặc định nếu chưa có file lưu
 local DefaultConfig = {
     AutoTele = false,
     AutoArise = false,
@@ -52,7 +53,7 @@ local DefaultConfig = {
 }
 
 local State = {
-    -- Persistent States
+    -- Persistent
     AutoTele = DefaultConfig.AutoTele,
     AutoArise = DefaultConfig.AutoArise,
     AntiAFK = DefaultConfig.AntiAFK,
@@ -63,7 +64,7 @@ local State = {
     TargetWave = DefaultConfig.TargetWave,
     CycleIndex = DefaultConfig.CycleIndex,
 
-    -- Runtime States (Không cần lưu vào file)
+    -- Runtime
     CurrentWave = 1,
     LastDetectedWave = 1,
     IsAwaking = false,
@@ -81,9 +82,28 @@ local State = {
     TeleOffset = Vector3.new(0, 0.5, 3.5),
 }
 
--- Hàm lưu dữ liệu xuống file
+-- Trích xuất hoặc lấy Asset cho Logo hoa sen chuẩn của LotusHub
+local function resolveLotusLogoAsset(): string
+    if typeof(isfile) == "function" and isfile(LOGO_FILENAME) and typeof(getcustomasset) == "function" then
+        return getcustomasset(LOGO_FILENAME)
+    end
+
+    if LOGO_RAW_URL ~= "" and typeof(writefile) == "function" and typeof(getcustomasset) == "function" then
+        local success, res = pcall(function()
+            return game:HttpGet(LOGO_RAW_URL)
+        end)
+        if success and res and #res > 0 then
+            pcall(writefile, LOGO_FILENAME, res)
+            return getcustomasset(LOGO_FILENAME)
+        end
+    end
+
+    -- Fallback asset nếu chưa tạo file cục bộ
+    return "rbxassetid://107233469599938"
+end
+
 local function saveConfigFile()
-    local dataToSave = {
+    local data = {
         AutoTele = State.AutoTele,
         AutoArise = State.AutoArise,
         AntiAFK = State.AntiAFK,
@@ -94,34 +114,22 @@ local function saveConfigFile()
         TargetWave = State.TargetWave,
         CycleIndex = State.CycleIndex,
     }
-
-    local success, encoded = pcall(function()
-        return HttpService:JSONEncode(dataToSave)
-    end)
-
+    local success, encoded = pcall(function() return HttpService:JSONEncode(data) end)
     if success and encoded and typeof(writefile) == "function" then
         pcall(writefile, CONFIG_FILE, encoded)
     end
 end
 
--- Hàm đọc và nạp cấu hình từ file
 local function loadConfigFile()
     if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
-
     local exists = false
-    pcall(function()
-        exists = isfile(CONFIG_FILE)
-    end)
-
+    pcall(function() exists = isfile(CONFIG_FILE) end)
     if not exists then return end
 
     local readSuccess, content = pcall(readfile, CONFIG_FILE)
     if not readSuccess or not content or content == "" then return end
 
-    local decodeSuccess, decoded = pcall(function()
-        return HttpService:JSONDecode(content)
-    end)
-
+    local decodeSuccess, decoded = pcall(function() return HttpService:JSONDecode(content) end)
     if decodeSuccess and typeof(decoded) == "table" then
         if decoded.AutoTele ~= nil then State.AutoTele = decoded.AutoTele end
         if decoded.AutoArise ~= nil then State.AutoArise = decoded.AutoArise end
@@ -135,370 +143,531 @@ local function loadConfigFile()
     end
 end
 
--- Tải cấu hình đã lưu trước khi tạo giao diện
 loadConfigFile()
 
 -- ==========================================
--- 2. DYNAMIC GUI CREATION
+-- 2. CANVA-INSPIRED MODERN UI ARCHITECTURE
 -- ==========================================
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-local existingGui = playerGui:FindFirstChild("MrDon_AriseController")
-if existingGui then
-    existingGui:Destroy()
-end
+local oldGui = playerGui:FindFirstChild("LotusHub_AnimeVanguard")
+if oldGui then oldGui:Destroy() end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MrDon_AriseController"
+ScreenGui.Name = "LotusHub_AnimeVanguard"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = playerGui
 
+-- Cửa sổ chính: Phủ nền mờ bo góc và viền kim loại tối chuẩn mẫu
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.fromOffset(300, 495)
-MainFrame.Position = UDim2.new(0.5, -150, 0.15, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+MainFrame.Size = UDim2.fromOffset(580, 360)
+MainFrame.Position = UDim2.new(0.5, -290, 0.5, -180)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = MainFrame
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 10)
+MainCorner.Parent = MainFrame
 
-local UIStroke = Instance.new("UIStroke")
-UIStroke.Color = Color3.fromRGB(65, 65, 85)
-UIStroke.Thickness = 1.5
-UIStroke.Parent = MainFrame
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(50, 50, 60)
+MainStroke.Thickness = 1.2
+MainStroke.Parent = MainFrame
 
+-- TITLE BAR (Header)
 local TitleBar = Instance.new("Frame")
 TitleBar.Name = "TitleBar"
-TitleBar.Size = UDim2.new(1, 0, 0, 34)
-TitleBar.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+TitleBar.Size = UDim2.new(1, 0, 0, 42)
+TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
 TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
 
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 8)
-TitleCorner.Parent = TitleBar
+local TitleBarBottomLine = Instance.new("Frame")
+TitleBarBottomLine.Size = UDim2.new(1, 0, 0, 1)
+TitleBarBottomLine.Position = UDim2.new(0, 0, 1, -1)
+TitleBarBottomLine.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+TitleBarBottomLine.BorderSizePixel = 0
+TitleBarBottomLine.Parent = TitleBar
 
-local TitleFix = Instance.new("Frame")
-TitleFix.Size = UDim2.new(1, 0, 0, 8)
-TitleFix.Position = UDim2.new(0, 0, 1, -8)
-TitleFix.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
-TitleFix.BorderSizePixel = 0
-TitleFix.Parent = TitleBar
+-- Logo Hoa Sen (Giữ đúng hình dáng logo đính kèm)
+local LogoImage = Instance.new("ImageLabel")
+LogoImage.Name = "LotusLogo"
+LogoImage.Size = UDim2.fromOffset(26, 26)
+LogoImage.Position = UDim2.fromOffset(14, 8)
+LogoImage.BackgroundTransparency = 1
+LogoImage.Image = resolveLotusLogoAsset()
+LogoImage.ScaleType = Enum.ScaleType.Fit
+LogoImage.Parent = TitleBar
 
-local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -40, 1, 0)
-TitleLabel.Position = UDim2.fromOffset(12, 0)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "MapEffects Master (v12 - Auto Save)"
-TitleLabel.TextColor3 = Color3.fromRGB(235, 235, 245)
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 12
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.Parent = TitleBar
+-- Tiêu đề: LotusHub - Anime Vanguard
+local TitleText = Instance.new("TextLabel")
+TitleText.Size = UDim2.new(1, -140, 1, 0)
+TitleText.Position = UDim2.fromOffset(48, 0)
+TitleText.BackgroundTransparency = 1
+TitleText.Text = "LotusHub - Anime Vanguard"
+TitleText.TextColor3 = Color3.fromRGB(225, 225, 235)
+TitleText.Font = Enum.Font.GothamSemibold
+TitleText.TextSize = 13
+TitleText.TextXAlignment = Enum.TextXAlignment.Left
+TitleText.Parent = TitleBar
+
+-- Nút Thu Nhỏ (-) & Đóng (X)
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.fromOffset(30, 30)
+MinimizeBtn.Position = UDim2.new(1, -68, 0, 6)
+MinimizeBtn.BackgroundTransparency = 1
+MinimizeBtn.Text = "—"
+MinimizeBtn.TextColor3 = Color3.fromRGB(180, 180, 195)
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 13
+MinimizeBtn.Parent = TitleBar
 
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.fromOffset(26, 26)
-CloseBtn.Position = UDim2.new(1, -30, 0, 4)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(190, 55, 55)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Size = UDim2.fromOffset(30, 30)
+CloseBtn.Position = UDim2.new(1, -36, 0, 6)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(210, 80, 80)
 CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 12
+CloseBtn.TextSize = 13
 CloseBtn.Parent = TitleBar
 
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 6)
-CloseCorner.Parent = CloseBtn
+-- BODY CONTAINER
+local BodyContainer = Instance.new("Frame")
+BodyContainer.Name = "BodyContainer"
+BodyContainer.Size = UDim2.new(1, 0, 1, -42)
+BodyContainer.Position = UDim2.fromOffset(0, 42)
+BodyContainer.BackgroundTransparency = 1
+BodyContainer.Parent = MainFrame
 
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(1, -24, 0, 18)
-StatusLabel.Position = UDim2.fromOffset(12, 40)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "Mob Target: None"
-StatusLabel.TextColor3 = Color3.fromRGB(165, 165, 185)
-StatusLabel.Font = Enum.Font.GothamMedium
-StatusLabel.TextSize = 11
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatusLabel.TextTruncate = Enum.TextTruncate.AtEnd
-StatusLabel.Parent = MainFrame
+-- SIDEBAR (Trái)
+local Sidebar = Instance.new("Frame")
+Sidebar.Name = "Sidebar"
+Sidebar.Size = UDim2.new(0, 140, 1, 0)
+Sidebar.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = BodyContainer
 
-local WaveStatusLabel = Instance.new("TextLabel")
-WaveStatusLabel.Size = UDim2.new(1, -24, 0, 18)
-WaveStatusLabel.Position = UDim2.fromOffset(12, 58)
-WaveStatusLabel.BackgroundTransparency = 1
-WaveStatusLabel.Text = string.format("Wave Hiện Tại: 1 | Đích: Wave %d", State.TargetWave)
-WaveStatusLabel.TextColor3 = Color3.fromRGB(130, 200, 255)
-WaveStatusLabel.Font = Enum.Font.Gotham
-WaveStatusLabel.TextSize = 11
-WaveStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-WaveStatusLabel.Parent = MainFrame
+local SidebarDivider = Instance.new("Frame")
+SidebarDivider.Size = UDim2.new(0, 1, 1, 0)
+SidebarDivider.Position = UDim2.new(1, -1, 0, 0)
+SidebarDivider.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+SidebarDivider.BorderSizePixel = 0
+SidebarDivider.Parent = Sidebar
 
--- Nút Toggle được liên kết trạng thái tự lưu
-local function createToggleButton(text: string, posY: number, getVal: () -> boolean, callback: (boolean, TextButton) -> ()): TextButton
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -24, 0, 34)
-    btn.Position = UDim2.fromOffset(12, posY)
-    btn.Font = Enum.Font.GothamSemibold
-    btn.TextSize = 12
-    btn.AutoButtonColor = false
-    btn.Parent = MainFrame
+local TabListLayout = Instance.new("UIListLayout")
+TabListLayout.Padding = UDim.new(0, 8)
+TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabListLayout.Parent = Sidebar
+
+local TabPadding = Instance.new("UIPadding")
+TabPadding.PaddingTop = UDim.new(0, 14)
+TabPadding.PaddingLeft = UDim.new(0, 10)
+TabPadding.PaddingRight = UDim.new(0, 10)
+TabPadding.Parent = Sidebar
+
+-- CONTENT CONTAINER (Phải)
+local ContentArea = Instance.new("Frame")
+ContentArea.Name = "ContentArea"
+ContentArea.Size = UDim2.new(1, -140, 1, 0)
+ContentArea.Position = UDim2.fromOffset(140, 0)
+ContentArea.BackgroundTransparency = 1
+ContentArea.Parent = BodyContainer
+
+-- BẢNG CUỘN CHO TỪNG TAB
+local function createTabContentPage(name: string): ScrollingFrame
+    local page = Instance.new("ScrollingFrame")
+    page.Name = name .. "Page"
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 3
+    page.ScrollBarImageColor3 = Color3.fromRGB(70, 70, 85)
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = ContentArea
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 10)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = page
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 16)
+    pad.PaddingBottom = UDim.new(0, 16)
+    pad.PaddingLeft = UDim.new(0, 20)
+    pad.PaddingRight = UDim.new(0, 20)
+    pad.Parent = page
+
+    -- Tiêu đề lớn đầu trang theo Canva
+    local headerTitle = Instance.new("TextLabel")
+    headerTitle.Name = "HeaderTitle"
+    headerTitle.Size = UDim2.new(1, 0, 0, 26)
+    headerTitle.BackgroundTransparency = 1
+    headerTitle.Text = name
+    headerTitle.TextColor3 = Color3.fromRGB(240, 240, 250)
+    headerTitle.Font = Enum.Font.GothamBold
+    headerTitle.TextSize = 20
+    headerTitle.TextXAlignment = Enum.TextXAlignment.Left
+    headerTitle.Parent = page
+
+    return page
+end
+
+local TSJWPage = createTabContentPage("TSJW")
+local MiscPage = createTabContentPage("Misc")
+
+-- ==========================================
+-- 3. INTERACTIVE COMPONENTS (CANVA SWITCH & TABS)
+-- ==========================================
+local activeTabName = "TSJW"
+local tabButtons = {}
+
+local function selectTab(targetTab: string)
+    activeTabName = targetTab
+    TSJWPage.Visible = (targetTab == "TSJW")
+    MiscPage.Visible = (targetTab == "Misc")
+
+    for name, btn in pairs(tabButtons) do
+        local indicator = btn:FindFirstChild("Indicator") :: Frame?
+        if name == targetTab then
+            btn.BackgroundColor3 = Color3.fromRGB(34, 34, 44)
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            if indicator then indicator.Visible = true end
+        else
+            btn.BackgroundTransparency = 1
+            btn.TextColor3 = Color3.fromRGB(150, 150, 165)
+            if indicator then indicator.Visible = false end
+        end
+    end
+end
+
+local function createSidebarTabButton(name: string, layoutOrder: number)
+    local tabBtn = Instance.new("TextButton")
+    tabBtn.Name = name .. "Tab"
+    tabBtn.Size = UDim2.new(1, 0, 0, 36)
+    tabBtn.BackgroundColor3 = Color3.fromRGB(34, 34, 44)
+    tabBtn.BackgroundTransparency = 1
+    tabBtn.Text = "   " .. name
+    tabBtn.TextColor3 = Color3.fromRGB(150, 150, 165)
+    tabBtn.Font = Enum.Font.GothamSemibold
+    tabBtn.TextSize = 13
+    tabBtn.TextXAlignment = Enum.TextXAlignment.Left
+    tabBtn.AutoButtonColor = false
+    tabBtn.LayoutOrder = layoutOrder
+    tabBtn.Parent = Sidebar
 
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
+    corner.Parent = tabBtn
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Thickness = 1
-    stroke.Parent = btn
+    -- Vạch trắng định vị bên trái tab đang chọn theo Canva
+    local indicator = Instance.new("Frame")
+    indicator.Name = "Indicator"
+    indicator.Size = UDim2.new(0, 3, 0, 18)
+    indicator.Position = UDim2.new(0, 2, 0.5, -9)
+    indicator.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    indicator.BorderSizePixel = 0
+    indicator.Visible = false
+    indicator.Parent = tabBtn
+
+    local indCorner = Instance.new("UICorner")
+    indCorner.CornerRadius = UDim.new(0, 2)
+    indCorner.Parent = indicator
+
+    tabButtons[name] = tabBtn
+
+    tabBtn.MouseButton1Click:Connect(function()
+        selectTab(name)
+    end)
+end
+
+createSidebarTabButton("TSJW", 1)
+createSidebarTabButton("Misc", 2)
+
+-- HÀM TẠO THẺ CÔNG TẮC BẬT/TẮT (CANVA TOGGLE SWITCH ROW)
+local function createToggleRow(parent: Instance, title: string, order: number, getVal: () -> boolean, callback: (boolean) -> ()): (Frame, () -> ())
+    local row = Instance.new("Frame")
+    row.Name = title .. "_Row"
+    row.Size = UDim2.new(1, 0, 0, 48)
+    row.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    row.BorderSizePixel = 0
+    row.LayoutOrder = order
+    row.Parent = parent
+
+    local rowCorner = Instance.new("UICorner")
+    rowCorner.CornerRadius = UDim.new(0, 8)
+    rowCorner.Parent = row
+
+    local rowStroke = Instance.new("UIStroke")
+    rowStroke.Color = Color3.fromRGB(48, 48, 58)
+    rowStroke.Thickness = 1
+    rowStroke.Parent = row
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -70, 1, 0)
+    label.Position = UDim2.fromOffset(16, 0)
+    label.BackgroundTransparency = 1
+    label.Text = title
+    label.TextColor3 = Color3.fromRGB(230, 230, 240)
+    label.Font = Enum.Font.GothamMedium
+    label.TextSize = 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    -- Khung Capsule Toggle Switch
+    local switch = Instance.new("TextButton")
+    switch.Name = "Switch"
+    switch.Size = UDim2.fromOffset(46, 24)
+    switch.Position = UDim2.new(1, -60, 0.5, -12)
+    switch.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+    switch.Text = ""
+    switch.AutoButtonColor = false
+    switch.Parent = row
+
+    local switchCorner = Instance.new("UICorner")
+    switchCorner.CornerRadius = UDim.new(1, 0)
+    switchCorner.Parent = switch
+
+    local switchStroke = Instance.new("UIStroke")
+    switchStroke.Color = Color3.fromRGB(80, 80, 95)
+    switchStroke.Thickness = 1.4
+    switchStroke.Parent = switch
+
+    -- Núm tròn gạt (Knob)
+    local knob = Instance.new("Frame")
+    knob.Name = "Knob"
+    knob.Size = UDim2.fromOffset(18, 18)
+    knob.Position = UDim2.fromOffset(3, 3)
+    knob.BackgroundColor3 = Color3.fromRGB(150, 150, 165)
+    knob.BorderSizePixel = 0
+    knob.Parent = switch
+
+    local knobCorner = Instance.new("UICorner")
+    knobCorner.CornerRadius = UDim.new(1, 0)
+    knobCorner.Parent = knob
 
     local isEnabled = getVal()
 
-    local function updateVisual()
-        if isEnabled then
-            btn.BackgroundColor3 = Color3.fromRGB(40, 145, 85)
-            btn.Text = text .. ": ON"
-            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            stroke.Color = Color3.fromRGB(70, 200, 115)
+    local function updateVisual(animate: boolean)
+        local targetPos = isEnabled and UDim2.fromOffset(25, 3) or UDim2.fromOffset(3, 3)
+        local targetKnobColor = isEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(130, 130, 145)
+        local targetStrokeColor = isEnabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(80, 80, 95)
+        local targetBgColor = isEnabled and Color3.fromRGB(45, 45, 58) or Color3.fromRGB(20, 20, 26)
+
+        if animate then
+            TweenService:Create(knob, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Position = targetPos,
+                BackgroundColor3 = targetKnobColor
+            }):Play()
+            TweenService:Create(switchStroke, TweenInfo.new(0.18), { Color = targetStrokeColor }):Play()
+            TweenService:Create(switch, TweenInfo.new(0.18), { BackgroundColor3 = targetBgColor }):Play()
         else
-            btn.BackgroundColor3 = Color3.fromRGB(42, 42, 54)
-            btn.Text = text .. ": OFF"
-            btn.TextColor3 = Color3.fromRGB(210, 210, 220)
-            stroke.Color = Color3.fromRGB(70, 70, 90)
+            knob.Position = targetPos
+            knob.BackgroundColor3 = targetKnobColor
+            switchStroke.Color = targetStrokeColor
+            switch.BackgroundColor3 = targetBgColor
         end
     end
 
-    updateVisual()
+    updateVisual(false)
 
-    btn.MouseButton1Click:Connect(function()
+    switch.MouseButton1Click:Connect(function()
         isEnabled = not isEnabled
-        updateVisual()
-        callback(isEnabled, btn)
+        updateVisual(true)
+        callback(isEnabled)
         saveConfigFile()
     end)
 
-    return btn
+    return row, function() updateVisual(true) end
 end
 
--- MODULE 1: MAPEFFECTS & ANTI AFK
-createToggleButton("Auto Tele To Model", 80, function() return State.AutoTele end, function(val)
-    State.AutoTele = val
-    if not val then
-        State.CurrentTarget = nil
-        StatusLabel.Text = "Mob Target: Tắt Auto Tele"
-    end
-end)
+-- ==========================================
+-- 4. BUILD ROWS FOR TSJW & MISC
+-- ==========================================
 
-createToggleButton("Auto Arise (1s / lần)", 118, function() return State.AutoArise end, function(val)
-    State.AutoArise = val
-end)
+-- KHỐI STATUS HUD (Hiện trạng thái quái & wave)
+local StatusHUD = Instance.new("Frame")
+StatusHUD.Name = "StatusHUD"
+StatusHUD.Size = UDim2.new(1, 0, 0, 48)
+StatusHUD.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
+StatusHUD.BorderSizePixel = 0
+StatusHUD.LayoutOrder = 1
+StatusHUD.Parent = TSJWPage
 
-createToggleButton("Anti-AFK Protection", 156, function() return State.AntiAFK end, function(val)
-    State.AntiAFK = val
-end)
+local shc = Instance.new("UICorner")
+shc.CornerRadius = UDim.new(0, 8)
+shc.Parent = StatusHUD
 
--- MODULE 2: AUTO JOIN TSJW QUEST
-local tsjwButton: TextButton? = nil
+local TargetMobLabel = Instance.new("TextLabel")
+TargetMobLabel.Size = UDim2.new(1, -20, 0, 18)
+TargetMobLabel.Position = UDim2.fromOffset(12, 6)
+TargetMobLabel.BackgroundTransparency = 1
+TargetMobLabel.Text = "Mob Target: None"
+TargetMobLabel.TextColor3 = Color3.fromRGB(175, 175, 195)
+TargetMobLabel.Font = Enum.Font.GothamMedium
+TargetMobLabel.TextSize = 11
+TargetMobLabel.TextXAlignment = Enum.TextXAlignment.Left
+TargetMobLabel.TextTruncate = Enum.TextTruncate.AtEnd
+TargetMobLabel.Parent = StatusHUD
 
-local function stopTSJWSequence()
-    if State.TSJWThread then
-        task.cancel(State.TSJWThread)
-        State.TSJWThread = nil
-    end
-    State.TSJWRemainingSeconds = 0
-    if tsjwButton and not State.AutoJoinTSJW then
-        tsjwButton.Text = "Auto Join TSJW Quest: OFF"
-    end
-end
+local WaveInfoLabel = Instance.new("TextLabel")
+WaveInfoLabel.Size = UDim2.new(1, -20, 0, 18)
+WaveInfoLabel.Position = UDim2.fromOffset(12, 24)
+WaveInfoLabel.BackgroundTransparency = 1
+WaveInfoLabel.Text = string.format("Wave Hiện Tại: 1 | Đích: Wave %d", State.TargetWave)
+WaveInfoLabel.TextColor3 = Color3.fromRGB(120, 195, 255)
+WaveInfoLabel.Font = Enum.Font.Gotham
+WaveInfoLabel.TextSize = 11
+WaveInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+WaveInfoLabel.Parent = StatusHUD
 
-local function executeTSJWMatchmaking()
-    State.TSJWThread = task.spawn(function()
-        State.TSJWRemainingSeconds = State.TSJWWaitSeconds
-
-        while State.TSJWRemainingSeconds > 0 and State.AutoJoinTSJW do
-            if tsjwButton then
-                tsjwButton.Text = string.format("TSJW Quest: Đang chờ (%ds)", State.TSJWRemainingSeconds)
-            end
-            task.wait(1)
-            State.TSJWRemainingSeconds = State.TSJWRemainingSeconds - 1
-        end
-
-        if not State.AutoJoinTSJW then return end
-
-        if tsjwButton then
-            tsjwButton.Text = "TSJW Quest: Đang gửi lệnh tạo phòng..."
-        end
-
-        local remote = ReplicatedStorage:WaitForChild("AV_LOBBY_MATCHMAKING_V1_BLINK_RELIABLE_REMOTE", 10) :: RemoteEvent?
-        if remote and remote:IsA("RemoteEvent") then
-            pcall(function()
-                local args1 = {
-                    buffer.fromstring("\000\000\001\vLegendStage\006Stage3\004Act1")
-                }
-                remote:FireServer(unpack(args1))
-            end)
-
-            task.wait(2.5)
-
-            if not State.AutoJoinTSJW then return end
-
-            if tsjwButton then
-                tsjwButton.Text = "TSJW Quest: Đang Start trận..."
-            end
-
-            pcall(function()
-                local args2 = {
-                    buffer.fromstring("\005")
-                }
-                remote:FireServer(unpack(args2))
-            end)
-
-            task.wait(2.0)
-            if tsjwButton and State.AutoJoinTSJW then
-                tsjwButton.Text = "TSJW Quest: Đã gửi lệnh (Hoàn tất)"
-            end
-        else
-            if tsjwButton then
-                tsjwButton.Text = "TSJW Quest: Không tìm thấy Remote"
-            end
-        end
-    end)
-end
-
-tsjwButton = createToggleButton("Auto Join TSJW Quest", 194, function() return State.AutoJoinTSJW end, function(val)
+-- CÁC NÚT BẬT TẮT TRONG TSJW
+createToggleRow(TSJWPage, "Auto Join TSJW Quest", 2, function() return State.AutoJoinTSJW end, function(val)
     State.AutoJoinTSJW = val
     if val then
-        executeTSJWMatchmaking()
+        if not State.TSJWThread then executeTSJWMatchmaking() end
     else
         stopTSJWSequence()
     end
 end)
 
--- Tự động chạy lại luồng nếu trước đó đang bật
-if State.AutoJoinTSJW then
-    executeTSJWMatchmaking()
-end
-
--- SEPARATOR
-local SepLine = Instance.new("Frame")
-SepLine.Size = UDim2.new(1, -24, 0, 1)
-SepLine.Position = UDim2.fromOffset(12, 234)
-SepLine.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
-SepLine.BorderSizePixel = 0
-SepLine.Parent = MainFrame
-
--- MODULE 3: STATUE CONTROLS
-local statueIdx = 1
-for i, name in ipairs(StatueList) do
-    if name == State.TargetStatue then
-        statueIdx = i
-        break
+createToggleRow(TSJWPage, "Auto Tele To Model", 3, function() return State.AutoTele end, function(val)
+    State.AutoTele = val
+    if not val then
+        State.CurrentTarget = nil
+        TargetMobLabel.Text = "Mob Target: Tắt Auto Tele"
     end
-end
+end)
 
-local StatueSelectorBtn = Instance.new("TextButton")
-StatueSelectorBtn.Size = UDim2.new(1, -24, 0, 32)
-StatueSelectorBtn.Position = UDim2.fromOffset(12, 242)
-StatueSelectorBtn.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
-StatueSelectorBtn.TextColor3 = Color3.fromRGB(240, 240, 255)
-StatueSelectorBtn.Font = Enum.Font.GothamMedium
-StatueSelectorBtn.TextSize = 12
-StatueSelectorBtn.Parent = MainFrame
+createToggleRow(TSJWPage, "Auto Arise (1s / lần)", 4, function() return State.AutoArise end, function(val)
+    State.AutoArise = val
+end)
 
-local sc = Instance.new("UICorner")
-sc.CornerRadius = UDim.new(0, 6)
-sc.Parent = StatueSelectorBtn
+createToggleRow(TSJWPage, "Auto Awake Statue", 5, function() return State.AutoAwake end, function(val)
+    State.AutoAwake = val
+    if not val then State.IsAwaking = false end
+end)
+
+-- BỘ CHỌN STATUE & WAVE MỤC TIÊU
+local StatueRow = Instance.new("Frame")
+StatueRow.Size = UDim2.new(1, 0, 0, 48)
+StatueRow.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+StatueRow.LayoutOrder = 6
+StatueRow.Parent = TSJWPage
+
+local src = Instance.new("UICorner")
+src.CornerRadius = UDim.new(0, 8)
+src.Parent = StatueRow
+
+local StatueBtn = Instance.new("TextButton")
+StatueBtn.Size = UDim2.new(1, -24, 0, 32)
+StatueBtn.Position = UDim2.new(0, 12, 0.5, -16)
+StatueBtn.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
+StatueBtn.TextColor3 = Color3.fromRGB(240, 240, 255)
+StatueBtn.Font = Enum.Font.GothamMedium
+StatueBtn.TextSize = 12
+StatueBtn.Parent = StatueRow
+
+local sbc = Instance.new("UICorner")
+sbc.CornerRadius = UDim.new(0, 6)
+sbc.Parent = StatueBtn
 
 local function updateStatueBtnText()
     if State.TargetStatue == "Cycle (Mace->Sword->God)" then
-        StatueSelectorBtn.Text = string.format("Statue: Cycle [%s]", CycleSequence[State.CycleIndex]:gsub(" Statue", ""))
+        StatueBtn.Text = string.format("Statue Mục Tiêu: Cycle [%s]", CycleSequence[State.CycleIndex]:gsub(" Statue", ""))
     else
-        StatueSelectorBtn.Text = "Statue Mục Tiêu: " .. State.TargetStatue
+        StatueBtn.Text = "Statue Mục Tiêu: " .. State.TargetStatue
     end
 end
 
 updateStatueBtnText()
 
-StatueSelectorBtn.MouseButton1Click:Connect(function()
+local statueIdx = 1
+for i, name in ipairs(StatueList) do
+    if name == State.TargetStatue then statueIdx = i break end
+end
+
+StatueBtn.MouseButton1Click:Connect(function()
     statueIdx = statueIdx + 1
-    if statueIdx > #StatueList then
-        statueIdx = 1
-    end
+    if statueIdx > #StatueList then statueIdx = 1 end
     State.TargetStatue = StatueList[statueIdx]
     updateStatueBtnText()
     saveConfigFile()
 end)
 
+-- Ô NHẬP WAVE MỤC TIÊU N
+local WaveRow = Instance.new("Frame")
+WaveRow.Size = UDim2.new(1, 0, 0, 48)
+WaveRow.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+WaveRow.LayoutOrder = 7
+WaveRow.Parent = TSJWPage
+
+local wrc = Instance.new("UICorner")
+wrc.CornerRadius = UDim.new(0, 8)
+wrc.Parent = WaveRow
+
 local WaveBox = Instance.new("TextBox")
 WaveBox.Size = UDim2.new(1, -24, 0, 32)
-WaveBox.Position = UDim2.fromOffset(12, 280)
+WaveBox.Position = UDim2.new(0, 12, 0.5, -16)
 WaveBox.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
 WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(State.TargetWave)
 WaveBox.TextColor3 = Color3.fromRGB(240, 240, 255)
 WaveBox.Font = Enum.Font.GothamMedium
 WaveBox.TextSize = 12
 WaveBox.ClearTextOnFocus = true
-WaveBox.Parent = MainFrame
+WaveBox.Parent = WaveRow
 
-local wc = Instance.new("UICorner")
-wc.CornerRadius = UDim.new(0, 6)
-wc.Parent = WaveBox
+local wbc = Instance.new("UICorner")
+wbc.CornerRadius = UDim.new(0, 6)
+wbc.Parent = WaveBox
 
 WaveBox.FocusLost:Connect(function()
     local num = tonumber(string.match(WaveBox.Text, "%d+"))
     if num and num > 0 then
         State.TargetWave = num
         WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(num)
-        WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+        WaveInfoLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
         saveConfigFile()
     else
         WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(State.TargetWave)
     end
 end)
 
-createToggleButton("Auto Awake Statue", 318, function() return State.AutoAwake end, function(val)
-    State.AutoAwake = val
-    if not val then
-        State.IsAwaking = false
-    end
-end)
-
-createToggleButton("Auto Reset Khi Đổi Wave / Replay", 356, function() return State.ResetPerWave end, function(val)
+createToggleRow(TSJWPage, "Auto Reset Khi Đổi Wave / Replay", 8, function() return State.ResetPerWave end, function(val)
     State.ResetPerWave = val
 end)
 
-local ResetStatuesBtn = Instance.new("TextButton")
-ResetStatuesBtn.Size = UDim2.new(1, -24, 0, 30)
-ResetStatuesBtn.Position = UDim2.fromOffset(12, 396)
-ResetStatuesBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
-ResetStatuesBtn.Text = "Chuyển Tượng Kế Tiếp Trong Cycle"
-ResetStatuesBtn.TextColor3 = Color3.fromRGB(200, 200, 210)
-ResetStatuesBtn.Font = Enum.Font.Gotham
-ResetStatuesBtn.TextSize = 11
-ResetStatuesBtn.Parent = MainFrame
-
-local rc = Instance.new("UICorner")
-rc.CornerRadius = UDim.new(0, 6)
-rc.Parent = ResetStatuesBtn
-
-ResetStatuesBtn.MouseButton1Click:Connect(function()
-    table.clear(State.AwakenedStatues)
-    State.HasAwakenedThisMatch = false
-    State.CycleIndex = State.CycleIndex + 1
-    if State.CycleIndex > #CycleSequence then
-        State.CycleIndex = 1
-    end
-    updateStatueBtnText()
-    saveConfigFile()
-    ResetStatuesBtn.Text = "Đã chuyển -> " .. CycleSequence[State.CycleIndex]
-    task.delay(1.2, function()
-        ResetStatuesBtn.Text = "Chuyển Tượng Kế Tiếp Trong Cycle"
-    end)
+-- TAB MISC (Chỉ chứa Anti-AFK theo yêu cầu)
+createToggleRow(MiscPage, "Anti-AFK Protection", 1, function() return State.AntiAFK end, function(val)
+    State.AntiAFK = val
 end)
 
--- KÉO THẢ CỬA SỔ
+selectTab("TSJW")
+
+-- ==========================================
+-- 5. MINIMIZE & DRAGGING SYSTEM
+-- ==========================================
+local isMinimized = false
+MinimizeBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    if isMinimized then
+        TweenService:Create(MainFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.fromOffset(580, 42)
+        }):Play()
+        BodyContainer.Visible = false
+    else
+        BodyContainer.Visible = true
+        TweenService:Create(MainFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = UDim2.fromOffset(580, 360)
+        }):Play()
+    end
+end)
+
 local dragging = false
 local dragInput: InputObject? = nil
 local dragStart: Vector3? = nil
@@ -537,29 +706,69 @@ local dragConnection = UserInputService.InputChanged:Connect(function(input: Inp
 end)
 
 -- ==========================================
--- 3. TRUY XUẤT CHUẨN XÁC WAVESAMOUNT (O(1))
+-- 6. MATCHMAKING & ENGINE LOGIC
+-- ==========================================
+function stopTSJWSequence()
+    if State.TSJWThread then
+        task.cancel(State.TSJWThread)
+        State.TSJWThread = nil
+    end
+    State.TSJWRemainingSeconds = 0
+end
+
+function executeTSJWMatchmaking()
+    State.TSJWThread = task.spawn(function()
+        State.TSJWRemainingSeconds = State.TSJWWaitSeconds
+
+        while State.TSJWRemainingSeconds > 0 and State.AutoJoinTSJW do
+            task.wait(1)
+            State.TSJWRemainingSeconds = State.TSJWRemainingSeconds - 1
+        end
+
+        if not State.AutoJoinTSJW then return end
+
+        local remote = ReplicatedStorage:WaitForChild("AV_LOBBY_MATCHMAKING_V1_BLINK_RELIABLE_REMOTE", 10) :: RemoteEvent?
+        if remote and remote:IsA("RemoteEvent") then
+            pcall(function()
+                local args1 = {
+                    buffer.fromstring("\000\000\001\vLegendStage\006Stage3\004Act1")
+                }
+                remote:FireServer(unpack(args1))
+            end)
+
+            task.wait(2.5)
+
+            if not State.AutoJoinTSJW then return end
+
+            pcall(function()
+                local args2 = {
+                    buffer.fromstring("\005")
+                }
+                remote:FireServer(unpack(args2))
+            end)
+        end
+    end)
+end
+
+if State.AutoJoinTSJW then
+    executeTSJWMatchmaking()
+end
+
+-- ==========================================
+-- 7. MAPEFFECTS & STATUES EXECUTION
 -- ==========================================
 local function parseWavesAmountString(str: string): number?
     if not str or str == "" then return nil end
-
     local wave = string.match(str, "^%s*(%d+)")
-    if wave then
-        return tonumber(wave)
-    end
-
+    if wave then return tonumber(wave) end
     local cleaned = string.gsub(str, "<[^>]+>", "")
     local fallback = string.match(cleaned, "(%d+)%s*/")
-    if fallback then
-        return tonumber(fallback)
-    end
-
-    return nil
+    return fallback and tonumber(fallback) or nil
 end
 
 local function getExactWaveNumber(): number
     local pGui = LocalPlayer:FindFirstChild("PlayerGui")
     if not pGui then return State.CurrentWave end
-
     local hud = pGui:FindFirstChild("HUD")
     if hud then
         local map = hud:FindFirstChild("Map")
@@ -567,23 +776,16 @@ local function getExactWaveNumber(): number
             local wavesAmount = map:FindFirstChild("WavesAmount") :: TextLabel?
             if wavesAmount and wavesAmount:IsA("TextLabel") then
                 local parsed = parseWavesAmountString(wavesAmount.Text)
-                if parsed then
-                    return parsed
-                end
+                if parsed then return parsed end
             end
         end
     end
-
     return State.CurrentWave
 end
 
--- ==========================================
--- 4. STATUE INTERACTION LOGIC
--- ==========================================
 local function getStatuesFolder(): Instance?
     local map = workspace:FindFirstChild("Map")
-    if not map then return nil end
-    return map:FindFirstChild("Statues")
+    return map and map:FindFirstChild("Statues") or nil
 end
 
 local function getStatueInteractives(statueModel: Instance): (BasePart?, ProximityPrompt?)
@@ -591,16 +793,10 @@ local function getStatueInteractives(statueModel: Instance): (BasePart?, Proximi
     if not part or not part:IsA("BasePart") then
         part = statueModel:FindFirstChildWhichIsA("BasePart", true)
     end
-
     local prompt = nil
     local anchor = statueModel:FindFirstChild("PromptAnchor")
-    if anchor then
-        prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true)
-    end
-    if not prompt then
-        prompt = statueModel:FindFirstChildWhichIsA("ProximityPrompt", true)
-    end
-
+    if anchor then prompt = anchor:FindFirstChildWhichIsA("ProximityPrompt", true) end
+    if not prompt then prompt = statueModel:FindFirstChildWhichIsA("ProximityPrompt", true) end
     return part :: BasePart?, prompt
 end
 
@@ -630,19 +826,14 @@ local function processAwakeStatue(statueModel: Instance): boolean
         VirtualInputManager:SendKeyEvent(false, key, false, game)
         return true
     end
-
     return false
 end
 
--- ==========================================
--- 5. MAPEFFECTS MOB LOGIC
--- ==========================================
 local function getMapEffectsFolder(): Instance?
     local cam = workspace:FindFirstChild("Camera") or workspace.CurrentCamera
     if not cam then return nil end
     local clientWorld = cam:FindFirstChild("ClientWorld")
-    if not clientWorld then return nil end
-    return clientWorld:FindFirstChild("MapEffects")
+    return clientWorld and clientWorld:FindFirstChild("MapEffects") or nil
 end
 
 local function getMobPivotPart(model: Instance): BasePart?
@@ -655,9 +846,7 @@ end
 local function acquireNextMob(folder: Instance): Instance?
     local validModels = {}
     for _, child in ipairs(folder:GetChildren()) do
-        if getMobPivotPart(child) ~= nil then
-            table.insert(validModels, child)
-        end
+        if getMobPivotPart(child) ~= nil then table.insert(validModels, child) end
     end
     table.sort(validModels, function(a, b) return a.Name < b.Name end)
     return validModels[1]
@@ -668,13 +857,9 @@ local function triggerOptimizedArise(model: Instance)
     local prompt = nil
     if hrp then
         local anchor = hrp:FindFirstChild("ArisePromptAnchor")
-        if anchor then
-            prompt = anchor:FindFirstChild("MonarchArise")
-        end
+        if anchor then prompt = anchor:FindFirstChild("MonarchArise") end
     end
-    if not prompt then
-        prompt = model:FindFirstChild("MonarchArise", true)
-    end
+    if not prompt then prompt = model:FindFirstChild("MonarchArise", true) end
 
     local keyToPress = Enum.KeyCode.E
     local holdTime = 0.12
@@ -682,12 +867,8 @@ local function triggerOptimizedArise(model: Instance)
         prompt.Enabled = true
         prompt.RequiresLineOfSight = false
         prompt.MaxActivationDistance = 50
-        if prompt.KeyboardKeyCode ~= Enum.KeyCode.Unknown then
-            keyToPress = prompt.KeyboardKeyCode
-        end
-        if prompt.HoldDuration > 0 then
-            holdTime = prompt.HoldDuration + 0.05
-        end
+        if prompt.KeyboardKeyCode ~= Enum.KeyCode.Unknown then keyToPress = prompt.KeyboardKeyCode end
+        if prompt.HoldDuration > 0 then holdTime = prompt.HoldDuration + 0.05 end
     end
 
     task.spawn(function()
@@ -700,7 +881,7 @@ local function triggerOptimizedArise(model: Instance)
 end
 
 -- ==========================================
--- 6. ANTI-AFK HANDLER
+-- 8. RUNTIME DISPATCHER
 -- ==========================================
 local idledConnection = LocalPlayer.Idled:Connect(function()
     if not State.IsRunning or not State.AntiAFK then return end
@@ -710,19 +891,11 @@ local idledConnection = LocalPlayer.Idled:Connect(function()
     end)
 end)
 
--- ==========================================
--- 7. EVENT-DRIVEN & ENGINE LOOP
--- ==========================================
-local mainLoopConnection: RBXScriptConnection? = nil
-local waveChangedConn: RBXScriptConnection? = nil
-
 local function handleMatchOrWaveTransition(oldWave: number, newWave: number)
     if newWave < oldWave then
         if State.TargetStatue == "Cycle (Mace->Sword->God)" then
             State.CycleIndex = State.CycleIndex + 1
-            if State.CycleIndex > #CycleSequence then
-                State.CycleIndex = 1
-            end
+            if State.CycleIndex > #CycleSequence then State.CycleIndex = 1 end
             updateStatueBtnText()
             saveConfigFile()
         end
@@ -733,40 +906,15 @@ local function handleMatchOrWaveTransition(oldWave: number, newWave: number)
     end
 end
 
-local function setupWaveListener()
-    local pGui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pGui then return end
-    local hud = pGui:FindFirstChild("HUD")
-    if not hud then return end
-    local map = hud:FindFirstChild("Map")
-    if not map then return end
-    local wavesAmount = map:FindFirstChild("WavesAmount") :: TextLabel?
-
-    if wavesAmount and wavesAmount:IsA("TextLabel") then
-        if waveChangedConn then waveChangedConn:Disconnect() end
-        waveChangedConn = wavesAmount:GetPropertyChangedSignal("Text"):Connect(function()
-            local newWave = parseWavesAmountString(wavesAmount.Text)
-            if newWave and newWave ~= State.CurrentWave then
-                handleMatchOrWaveTransition(State.CurrentWave, newWave)
-                State.CurrentWave = newWave
-                WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
-            end
-        end)
-    end
-end
-
-setupWaveListener()
-
-mainLoopConnection = RunService.Heartbeat:Connect(function()
+local mainLoopConnection = RunService.Heartbeat:Connect(function()
     if not State.IsRunning then return end
-
     local now = os.clock()
 
     local liveWave = getExactWaveNumber()
     if liveWave ~= State.CurrentWave then
         handleMatchOrWaveTransition(State.CurrentWave, liveWave)
         State.CurrentWave = liveWave
-        WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+        WaveInfoLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
     end
 
     if State.AntiAFK and (now - State.LastAfkPulse >= State.AfkPulseInterval) then
@@ -808,7 +956,7 @@ mainLoopConnection = RunService.Heartbeat:Connect(function()
             if #statuesToProcess > 0 then
                 State.IsAwaking = true
                 local targetStatueModel = statuesToProcess[1]
-                StatusLabel.Text = "Đang Awake: " .. targetStatueModel.Name
+                TargetMobLabel.Text = "Đang Awake: " .. targetStatueModel.Name
 
                 local success = processAwakeStatue(targetStatueModel)
                 if success then
@@ -832,7 +980,7 @@ mainLoopConnection = RunService.Heartbeat:Connect(function()
 
     local effectsFolder = getMapEffectsFolder()
     if not effectsFolder then
-        StatusLabel.Text = "Target: Không tìm thấy MapEffects"
+        TargetMobLabel.Text = "Target: Không tìm thấy MapEffects"
         return
     end
 
@@ -843,12 +991,12 @@ mainLoopConnection = RunService.Heartbeat:Connect(function()
     local currentMob = State.CurrentTarget
     if not currentMob then
         if State.AutoTele or State.AutoArise then
-            StatusLabel.Text = "Mob Target: Đang chờ quái xuất hiện..."
+            TargetMobLabel.Text = "Mob Target: Đang chờ quái xuất hiện..."
         end
         return
     end
 
-    StatusLabel.Text = "Mob Target: " .. currentMob.Name
+    TargetMobLabel.Text = "Mob Target: " .. currentMob.Name
 
     if State.AutoTele and not State.IsAwaking then
         local mobPart = getMobPivotPart(currentMob)
@@ -870,7 +1018,7 @@ mainLoopConnection = RunService.Heartbeat:Connect(function()
     end
 end)
 
--- DỌN DẸP AN TOÀN
+-- CLEANUP
 CloseBtn.MouseButton1Click:Connect(function()
     State.IsRunning = false
     State.AutoTele = false
@@ -882,6 +1030,5 @@ CloseBtn.MouseButton1Click:Connect(function()
     if mainLoopConnection then mainLoopConnection:Disconnect() end
     if dragConnection then dragConnection:Disconnect() end
     if idledConnection then idledConnection:Disconnect() end
-    if waveChangedConn then waveChangedConn:Disconnect() end
     ScreenGui:Destroy()
 end)
