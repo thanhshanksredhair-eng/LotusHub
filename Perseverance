@@ -1,6 +1,6 @@
 --!strict
 --[[
-    Module: Complete MapEffects, Statue Master & Auto Join TSJW Quest (v11)
+    Module: Complete MapEffects, Statue Master, TSJW Quest & Persistent Config (v12)
     Target Statues: Axe, God, Mace, Shield, Sword Statue
     Path: workspace.Map.Statues
     Wave Source: PlayerGui.HUD.Map.WavesAmount
@@ -13,12 +13,15 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
 -- ==========================================
--- 1. STATE & CONFIGURATION
+-- 1. CONFIGURATION & PERSISTENCE ENGINE
 -- ==========================================
+local CONFIG_FILE = "MrDon_LotusHub_Config.json"
+
 local StatueList = {
     "All",
     "Cycle (Mace->Sword->God)",
@@ -35,31 +38,40 @@ local CycleSequence = {
     "God Statue"
 }
 
-local State = {
-    -- Auto Arise & Tele Mob
+-- Trạng thái mặc định nếu chưa có file lưu
+local DefaultConfig = {
     AutoTele = false,
     AutoArise = false,
     AntiAFK = true,
-    
-    -- Auto Awake Statue
+    AutoJoinTSJW = false,
     AutoAwake = false,
+    ResetPerWave = true,
     TargetStatue = "Cycle (Mace->Sword->God)",
-    CycleIndex = 1,
     TargetWave = 3,
+    CycleIndex = 1,
+}
+
+local State = {
+    -- Persistent States
+    AutoTele = DefaultConfig.AutoTele,
+    AutoArise = DefaultConfig.AutoArise,
+    AntiAFK = DefaultConfig.AntiAFK,
+    AutoJoinTSJW = DefaultConfig.AutoJoinTSJW,
+    AutoAwake = DefaultConfig.AutoAwake,
+    ResetPerWave = DefaultConfig.ResetPerWave,
+    TargetStatue = DefaultConfig.TargetStatue,
+    TargetWave = DefaultConfig.TargetWave,
+    CycleIndex = DefaultConfig.CycleIndex,
+
+    -- Runtime States (Không cần lưu vào file)
     CurrentWave = 1,
     LastDetectedWave = 1,
     IsAwaking = false,
     AwakenedStatues = {} :: {[string]: boolean},
-    ResetPerWave = true,
     HasAwakenedThisMatch = false,
-
-    -- Auto Join TSJW Quest
-    AutoJoinTSJW = false,
     TSJWThread = nil :: thread?,
-    TSJWWaitSeconds = 120, -- Thời gian chờ 2 phút
+    TSJWWaitSeconds = 120,
     TSJWRemainingSeconds = 0,
-    
-    -- Runtime
     IsRunning = true,
     CurrentTarget = nil :: Instance?,
     LastAriseTime = 0,
@@ -69,8 +81,65 @@ local State = {
     TeleOffset = Vector3.new(0, 0.5, 3.5),
 }
 
+-- Hàm lưu dữ liệu xuống file
+local function saveConfigFile()
+    local dataToSave = {
+        AutoTele = State.AutoTele,
+        AutoArise = State.AutoArise,
+        AntiAFK = State.AntiAFK,
+        AutoJoinTSJW = State.AutoJoinTSJW,
+        AutoAwake = State.AutoAwake,
+        ResetPerWave = State.ResetPerWave,
+        TargetStatue = State.TargetStatue,
+        TargetWave = State.TargetWave,
+        CycleIndex = State.CycleIndex,
+    }
+
+    local success, encoded = pcall(function()
+        return HttpService:JSONEncode(dataToSave)
+    end)
+
+    if success and encoded and typeof(writefile) == "function" then
+        pcall(writefile, CONFIG_FILE, encoded)
+    end
+end
+
+-- Hàm đọc và nạp cấu hình từ file
+local function loadConfigFile()
+    if typeof(readfile) ~= "function" or typeof(isfile) ~= "function" then return end
+
+    local exists = false
+    pcall(function()
+        exists = isfile(CONFIG_FILE)
+    end)
+
+    if not exists then return end
+
+    local readSuccess, content = pcall(readfile, CONFIG_FILE)
+    if not readSuccess or not content or content == "" then return end
+
+    local decodeSuccess, decoded = pcall(function()
+        return HttpService:JSONDecode(content)
+    end)
+
+    if decodeSuccess and typeof(decoded) == "table" then
+        if decoded.AutoTele ~= nil then State.AutoTele = decoded.AutoTele end
+        if decoded.AutoArise ~= nil then State.AutoArise = decoded.AutoArise end
+        if decoded.AntiAFK ~= nil then State.AntiAFK = decoded.AntiAFK end
+        if decoded.AutoJoinTSJW ~= nil then State.AutoJoinTSJW = decoded.AutoJoinTSJW end
+        if decoded.AutoAwake ~= nil then State.AutoAwake = decoded.AutoAwake end
+        if decoded.ResetPerWave ~= nil then State.ResetPerWave = decoded.ResetPerWave end
+        if decoded.TargetStatue ~= nil then State.TargetStatue = decoded.TargetStatue end
+        if decoded.TargetWave ~= nil then State.TargetWave = decoded.TargetWave end
+        if decoded.CycleIndex ~= nil then State.CycleIndex = decoded.CycleIndex end
+    end
+end
+
+-- Tải cấu hình đã lưu trước khi tạo giao diện
+loadConfigFile()
+
 -- ==========================================
--- 2. DYNAMIC GUI CREATION (EXPANDED TO V11)
+-- 2. DYNAMIC GUI CREATION
 -- ==========================================
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 local existingGui = playerGui:FindFirstChild("MrDon_AriseController")
@@ -123,7 +192,7 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -40, 1, 0)
 TitleLabel.Position = UDim2.fromOffset(12, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "MapEffects & Statue Master (v11)"
+TitleLabel.Text = "MapEffects Master (v12 - Auto Save)"
 TitleLabel.TextColor3 = Color3.fromRGB(235, 235, 245)
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 12
@@ -160,14 +229,15 @@ local WaveStatusLabel = Instance.new("TextLabel")
 WaveStatusLabel.Size = UDim2.new(1, -24, 0, 18)
 WaveStatusLabel.Position = UDim2.fromOffset(12, 58)
 WaveStatusLabel.BackgroundTransparency = 1
-WaveStatusLabel.Text = "Wave Hiện Tại: 1 | Đích: Wave 3"
+WaveStatusLabel.Text = string.format("Wave Hiện Tại: 1 | Đích: Wave %d", State.TargetWave)
 WaveStatusLabel.TextColor3 = Color3.fromRGB(130, 200, 255)
 WaveStatusLabel.Font = Enum.Font.Gotham
 WaveStatusLabel.TextSize = 11
 WaveStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 WaveStatusLabel.Parent = MainFrame
 
-local function createToggleButton(text: string, posY: number, defaultState: boolean, callback: (boolean, TextButton) -> ()): TextButton
+-- Nút Toggle được liên kết trạng thái tự lưu
+local function createToggleButton(text: string, posY: number, getVal: () -> boolean, callback: (boolean, TextButton) -> ()): TextButton
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -24, 0, 34)
     btn.Position = UDim2.fromOffset(12, posY)
@@ -184,7 +254,7 @@ local function createToggleButton(text: string, posY: number, defaultState: bool
     stroke.Thickness = 1
     stroke.Parent = btn
 
-    local isEnabled = defaultState
+    local isEnabled = getVal()
 
     local function updateVisual()
         if isEnabled then
@@ -206,13 +276,14 @@ local function createToggleButton(text: string, posY: number, defaultState: bool
         isEnabled = not isEnabled
         updateVisual()
         callback(isEnabled, btn)
+        saveConfigFile()
     end)
 
     return btn
 end
 
 -- MODULE 1: MAPEFFECTS & ANTI AFK
-createToggleButton("Auto Tele To Model", 80, false, function(val)
+createToggleButton("Auto Tele To Model", 80, function() return State.AutoTele end, function(val)
     State.AutoTele = val
     if not val then
         State.CurrentTarget = nil
@@ -220,11 +291,11 @@ createToggleButton("Auto Tele To Model", 80, false, function(val)
     end
 end)
 
-createToggleButton("Auto Arise (1s / lần)", 118, false, function(val)
+createToggleButton("Auto Arise (1s / lần)", 118, function() return State.AutoArise end, function(val)
     State.AutoArise = val
 end)
 
-createToggleButton("Anti-AFK Protection", 156, true, function(val)
+createToggleButton("Anti-AFK Protection", 156, function() return State.AntiAFK end, function(val)
     State.AntiAFK = val
 end)
 
@@ -262,7 +333,6 @@ local function executeTSJWMatchmaking()
 
         local remote = ReplicatedStorage:WaitForChild("AV_LOBBY_MATCHMAKING_V1_BLINK_RELIABLE_REMOTE", 10) :: RemoteEvent?
         if remote and remote:IsA("RemoteEvent") then
-            -- BƯỚC 1: Gửi lệnh Matchmaking chọn LegendStage Stage3 Act1
             pcall(function()
                 local args1 = {
                     buffer.fromstring("\000\000\001\vLegendStage\006Stage3\004Act1")
@@ -270,7 +340,7 @@ local function executeTSJWMatchmaking()
                 remote:FireServer(unpack(args1))
             end)
 
-            task.wait(2.5) -- Đệm 2.5s để server đồng bộ phòng trước khi gửi lệnh Start
+            task.wait(2.5)
 
             if not State.AutoJoinTSJW then return end
 
@@ -278,7 +348,6 @@ local function executeTSJWMatchmaking()
                 tsjwButton.Text = "TSJW Quest: Đang Start trận..."
             end
 
-            -- BƯỚC 2: Gửi lệnh bắt đầu trận đấu
             pcall(function()
                 local args2 = {
                     buffer.fromstring("\005")
@@ -298,7 +367,7 @@ local function executeTSJWMatchmaking()
     end)
 end
 
-tsjwButton = createToggleButton("Auto Join TSJW Quest", 194, false, function(val)
+tsjwButton = createToggleButton("Auto Join TSJW Quest", 194, function() return State.AutoJoinTSJW end, function(val)
     State.AutoJoinTSJW = val
     if val then
         executeTSJWMatchmaking()
@@ -307,7 +376,12 @@ tsjwButton = createToggleButton("Auto Join TSJW Quest", 194, false, function(val
     end
 end)
 
--- PHÂN TÁCH STATUE CONTROLS
+-- Tự động chạy lại luồng nếu trước đó đang bật
+if State.AutoJoinTSJW then
+    executeTSJWMatchmaking()
+end
+
+-- SEPARATOR
 local SepLine = Instance.new("Frame")
 SepLine.Size = UDim2.new(1, -24, 0, 1)
 SepLine.Position = UDim2.fromOffset(12, 234)
@@ -315,12 +389,19 @@ SepLine.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
 SepLine.BorderSizePixel = 0
 SepLine.Parent = MainFrame
 
-local statueIdx = 2
+-- MODULE 3: STATUE CONTROLS
+local statueIdx = 1
+for i, name in ipairs(StatueList) do
+    if name == State.TargetStatue then
+        statueIdx = i
+        break
+    end
+end
+
 local StatueSelectorBtn = Instance.new("TextButton")
 StatueSelectorBtn.Size = UDim2.new(1, -24, 0, 32)
 StatueSelectorBtn.Position = UDim2.fromOffset(12, 242)
 StatueSelectorBtn.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
-StatueSelectorBtn.Text = "Statue: Cycle (Mace)"
 StatueSelectorBtn.TextColor3 = Color3.fromRGB(240, 240, 255)
 StatueSelectorBtn.Font = Enum.Font.GothamMedium
 StatueSelectorBtn.TextSize = 12
@@ -338,6 +419,8 @@ local function updateStatueBtnText()
     end
 end
 
+updateStatueBtnText()
+
 StatueSelectorBtn.MouseButton1Click:Connect(function()
     statueIdx = statueIdx + 1
     if statueIdx > #StatueList then
@@ -345,13 +428,14 @@ StatueSelectorBtn.MouseButton1Click:Connect(function()
     end
     State.TargetStatue = StatueList[statueIdx]
     updateStatueBtnText()
+    saveConfigFile()
 end)
 
 local WaveBox = Instance.new("TextBox")
 WaveBox.Size = UDim2.new(1, -24, 0, 32)
 WaveBox.Position = UDim2.fromOffset(12, 280)
 WaveBox.BackgroundColor3 = Color3.fromRGB(36, 40, 52)
-WaveBox.Text = "Chỉ Awake ở Wave: 3"
+WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(State.TargetWave)
 WaveBox.TextColor3 = Color3.fromRGB(240, 240, 255)
 WaveBox.Font = Enum.Font.GothamMedium
 WaveBox.TextSize = 12
@@ -368,19 +452,20 @@ WaveBox.FocusLost:Connect(function()
         State.TargetWave = num
         WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(num)
         WaveStatusLabel.Text = string.format("Wave Hiện Tại: %d | Đích: Wave %d", State.CurrentWave, State.TargetWave)
+        saveConfigFile()
     else
         WaveBox.Text = "Chỉ Awake ở Wave: " .. tostring(State.TargetWave)
     end
 end)
 
-createToggleButton("Auto Awake Statue", 318, false, function(val)
+createToggleButton("Auto Awake Statue", 318, function() return State.AutoAwake end, function(val)
     State.AutoAwake = val
     if not val then
         State.IsAwaking = false
     end
 end)
 
-createToggleButton("Auto Reset Khi Đổi Wave / Replay", 356, true, function(val)
+createToggleButton("Auto Reset Khi Đổi Wave / Replay", 356, function() return State.ResetPerWave end, function(val)
     State.ResetPerWave = val
 end)
 
@@ -406,13 +491,14 @@ ResetStatuesBtn.MouseButton1Click:Connect(function()
         State.CycleIndex = 1
     end
     updateStatueBtnText()
+    saveConfigFile()
     ResetStatuesBtn.Text = "Đã chuyển -> " .. CycleSequence[State.CycleIndex]
     task.delay(1.2, function()
         ResetStatuesBtn.Text = "Chuyển Tượng Kế Tiếp Trong Cycle"
     end)
 end)
 
--- Kéo thả cửa sổ
+-- KÉO THẢ CỬA SỔ
 local dragging = false
 local dragInput: InputObject? = nil
 local dragStart: Vector3? = nil
@@ -638,6 +724,7 @@ local function handleMatchOrWaveTransition(oldWave: number, newWave: number)
                 State.CycleIndex = 1
             end
             updateStatueBtnText()
+            saveConfigFile()
         end
         State.HasAwakenedThisMatch = false
         table.clear(State.AwakenedStatues)
@@ -783,7 +870,7 @@ mainLoopConnection = RunService.Heartbeat:Connect(function()
     end
 end)
 
--- CLEANUP
+-- DỌN DẸP AN TOÀN
 CloseBtn.MouseButton1Click:Connect(function()
     State.IsRunning = false
     State.AutoTele = false
